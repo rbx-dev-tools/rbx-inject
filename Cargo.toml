@@ -1,0 +1,43 @@
+[package]
+name = "rbx-inject"
+version = "0.1.0"
+edition = "2021"
+description = "Inject asset ids and config values into a Roblox place file, before you upload it"
+license = "MPL-2.0"
+keywords = ["roblox", "rbxl", "assets", "deployment"]
+categories = ["command-line-utilities", "game-development"]
+
+[dependencies]
+# The one tool in the chain that parses Roblox's binary format. It lives in its
+# own binary for that reason: when Roblox changes the format, the fix ships from
+# here without dragging a whole deployment CLI along with it. That happened on
+# 2026-06-30, when Tags moved into the SharedString index.
+rbx_binary = "3"
+rbx_dom_weak = "4"
+# Not decoration. Roblox has two content types now, the modern `Content` and the
+# legacy string-shaped `ContentId`, and no naming rule separates them: `Image` is
+# a ContentId, `ImageContent` is a Content. Guessing wrong makes the serializer
+# reject the whole file, so the database decides rather than a hardcoded list.
+rbx_reflection_database = "3"
+
+# Luau, vendored, so `keys` rules run in-process. The alternative was shelling
+# out to Lune for the one step that needs to evaluate a ModuleScript's table,
+# which meant a second Roblox-format parser in the pipeline, on its own release
+# cadence. That second parser is exactly what broke on 2026-06-30.
+# `send` is not about threads here: it is what makes mlua's error type
+# Send + Sync, which is what `anyhow::Error` requires to carry it.
+mlua = { version = "0.10", features = ["luau", "vendored", "send"] }
+
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+
+[lints.rust]
+unsafe_code = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
