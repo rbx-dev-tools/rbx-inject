@@ -149,10 +149,15 @@ fn apply_properties(
             continue;
         }
 
+        // Drop any property that would win over this one when the place is read
+        // back, or a redeploy writes a value the reader then discards. See
+        // `dom::overriding_properties`.
+        let stale = clear_overriding(inst, prop);
+
         match resolved {
             Resolved::Source(source) => {
                 report.change(format!(
-                    "{path}.{prop} = {} ({} bytes)",
+                    "{path}.{prop} = {} ({} bytes){stale}",
                     describe_source(value_key),
                     source.len()
                 ));
@@ -160,10 +165,26 @@ fn apply_properties(
             }
             Resolved::Value(value) => {
                 let variant = dom::variant_for(inst, prop, &value);
-                report.change(format!("{path}.{prop} = {value}"));
+                report.change(format!("{path}.{prop} = {value}{stale}"));
                 inst.properties.insert(ustr(prop), variant);
             }
         }
+    }
+}
+
+/// Remove the properties that would override `prop` on read, and describe what
+/// went, for the change line. Empty when there was nothing stale, which is the
+/// usual case.
+fn clear_overriding(inst: &mut rbx_dom_weak::Instance, prop: &str) -> String {
+    let removed: Vec<String> = dom::overriding_properties(inst.class.as_str(), prop)
+        .into_iter()
+        .filter(|name| inst.properties.remove(&ustr(name)).is_some())
+        .collect();
+
+    if removed.is_empty() {
+        String::new()
+    } else {
+        format!("  [replaced stale {}]", removed.join(", "))
     }
 }
 

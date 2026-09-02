@@ -278,7 +278,7 @@ what a pipeline wants. `--dry-run` reports what would change and writes nothing.
 The place is written to a temporary file and renamed, so an interrupted run
 cannot leave a truncated `.rbxl` where a working one used to be.
 
-## A note on property migrations
+## Property migrations, and why a redeploy is not a first deploy
 
 Roblox is migrating legacy properties to the `Content` type, and rbx-dom applies
 those migrations *on read*. A place written with `Image` comes back with
@@ -286,6 +286,28 @@ those migrations *on read*. A place written with `Image` comes back with
 the `SoundContent` the pattern would suggest. Write the property your Studio
 build uses and let the migration happen. There is no list of names worth
 hardcoding, which is the whole reason the reflection database decides.
+
+The consequence is not obvious, and it bites on the second deploy rather than
+the first. The migration has a precedence rule: **when the new property is
+already present, the old one is ignored.** So a place that already carries
+`ImageContent` from last week's deploy will discard a freshly written `Image`,
+and the game keeps shipping last week's asset.
+
+Nothing in that sequence looks wrong from the outside. The rule resolves, the
+report says the id was written, the upload succeeds, the file contains the old
+value. Only opening the place tells you.
+
+So a rule that writes a property removes the properties that would override it
+on read, and says so:
+
+```
+StarterGui.Icon.Image = rbxassetid://222  [replaced stale ImageContent]
+```
+
+Removing the stale twin rather than converting the value here is deliberate: it
+leaves the file in a state Studio could have produced, and lets rbx-dom's own
+reader run the migration, one-to-many cases included, instead of this crate
+reimplementing a table that changes with every Roblox release.
 
 ## Do I still need this?
 

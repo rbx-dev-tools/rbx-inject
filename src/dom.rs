@@ -2,6 +2,7 @@
 
 use rbx_dom_weak::types::{Content, ContentId, Ref, Variant, VariantType};
 use rbx_dom_weak::{ustr, Instance, InstanceBuilder, WeakDom};
+use rbx_reflection::{PropertyKind, PropertySerialization};
 
 /// Resolve a dot-separated path from the DataModel down.
 pub fn find(dom: &WeakDom, path: &str) -> Option<Ref> {
@@ -110,12 +111,55 @@ pub fn class_is_known(class_name: &str) -> bool {
 /// The type the reflection database declares for `class.prop`, walking up the
 /// superclass chain. `None` when either is unknown to the database.
 pub fn declared_type(class_name: &str, prop_name: &str) -> Option<VariantType> {
+    descriptor(class_name, prop_name).map(|p| p.data_type.ty())
+}
+
+/// Property names that would override `prop_name` when the place is read back.
+///
+/// Roblox is migrating legacy properties to newer ones, and rbx-dom applies
+/// those migrations on read with a documented precedence: when the new property
+/// is already present, the old one is ignored.
+///
+/// That turns a redeploy into a silent no-op. A place written last week comes
+/// back carrying `ImageContent`, because reading migrated the `Image` we wrote.
+/// Writing a fresh `Image` into it leaves both, and on the next read the stale
+/// `ImageContent` wins. The tool reports the change, the file contains the old
+/// id, and nothing anywhere disagrees. So the stale twin has to go.
+///
+/// Removing it rather than converting the value ourselves is deliberate: it
+/// leaves the file in a state Studio could have produced, and lets rbx-dom's own
+/// reader run the migration, one-to-many cases included, instead of this crate
+/// reimplementing a table that changes with every Roblox release.
+pub fn overriding_properties(class_name: &str, prop_name: &str) -> Vec<String> {
+    let Some(prop) = descriptor(class_name, prop_name) else {
+        return Vec::new();
+    };
+
+    if let PropertyKind::Canonical {
+        serialization: PropertySerialization::Migrate(migration),
+    } = &prop.kind
+    {
+        return migration
+            .new_property_names()
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+    }
+
+    Vec::new()
+}
+
+/// The descriptor for `class.prop`, walking up the superclass chain.
+fn descriptor<'a>(
+    class_name: &str,
+    prop_name: &str,
+) -> Option<&'a rbx_reflection::PropertyDescriptor<'a>> {
     let db = rbx_reflection_database::get().ok()?;
     let mut class = db.classes.get(class_name)?;
 
     loop {
         if let Some(prop) = class.properties.get(prop_name) {
-            return Some(prop.data_type.ty());
+            return Some(prop);
         }
         class = db.classes.get(class.superclass?)?;
     }

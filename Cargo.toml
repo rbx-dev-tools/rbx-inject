@@ -36,6 +36,10 @@ rbx_dom_weak = "4"
 # a ContentId, `ImageContent` is a Content. Guessing wrong makes the serializer
 # reject the whole file, so the database decides rather than a hardcoded list.
 rbx_reflection_database = "3"
+# The types the database is made of. Needed directly to read a property's
+# migration, which is what stops a redeploy writing a value that the reader
+# then throws away in favour of the one already in the file.
+rbx_reflection = "7"
 
 # Luau, vendored, so `keys` rules run in-process. The alternative was shelling
 # out to Lune for the one step that needs to evaluate a ModuleScript's table,

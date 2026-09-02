@@ -620,6 +620,7 @@ dependencies = [
  "mlua",
  "rbx_binary",
  "rbx_dom_weak",
+ "rbx_reflection",
  "rbx_reflection_database",
  "serde",
  "serde_json",
