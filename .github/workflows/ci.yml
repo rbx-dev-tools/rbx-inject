@@ -63,13 +63,18 @@ jobs:
     # Nothing enforces it on the stable toolchain above, so it is checked here
     # against the exact version it names, and it moves the day a dependency
     # moves it, deliberately rather than silently.
-    name: MSRV (1.85)
+    #
+    # This job earned its place on the first run: the number came from reading
+    # the resolved manifests, said 1.85, and was wrong, because `rbx_binary`
+    # declares no `rust-version` and still needs 1.87. Reading manifests gives a
+    # lower bound; only a compiler gives the answer.
+    name: MSRV (1.87)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.87"
       - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
       - run: cargo check --all-targets

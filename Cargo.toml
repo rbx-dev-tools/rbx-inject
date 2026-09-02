@@ -3,10 +3,17 @@ name = "rbx-inject"
 version = "0.1.0"
 edition = "2021"
 # Set by a dependency, not by our code: our own sources compile well below this.
-# 1.85 is the highest `rust-version` in the resolved graph (hashbrown 0.17,
-# indexmap 2.14, rmp-serde and clap_lex all declare it). It moves when a
-# dependency moves it; the `msrv` CI job is what stops it moving silently.
-rust-version = "1.85"
+#
+# Measured, not read off the manifests. The highest declared `rust-version` in
+# the resolved graph is 1.85, and that number is wrong: `rbx_binary` declares
+# none at all and uses `use<...>` precise capturing in a return-position impl
+# Trait in a trait, which no compiler before 1.87 accepts. A dependency's
+# manifest is a claim, and a crate that makes no claim still has a floor.
+#
+# So this is bisected against real toolchains, 1.86 fails and 1.87 passes, and
+# the `msrv` CI job holds it there. It moves when a dependency moves it,
+# deliberately rather than silently.
+rust-version = "1.87"
 license = "MPL-2.0"
 description = "Inject asset ids and config values into a Roblox place file, before you upload it"
 repository = "https://github.com/rbx-dev-tools/rbx-inject"
