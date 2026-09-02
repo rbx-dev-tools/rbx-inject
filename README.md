@@ -72,7 +72,7 @@ deploy env:
     rbx-inject apply --place build/game.rbxl \
                      --config injections.toml \
                      --assets output/Assets.luau \
-                     --ids-module src/shared/GameIds.luau \
+                     --module ids=src/shared/GameIds.luau \
                      --strict
     rbx place upload --env {{env}} --file build/game.rbxl
     rbx meta sync --env {{env}}
@@ -97,10 +97,39 @@ properties.Image = "ui.ShopIcon"
 
 | value | meaning |
 | --- | --- |
-| `ui.ShopIcon` | look the key up in the asphalt asset map |
-| `$module` | the whole asphalt module source (needs `--assets`) |
-| `$rbxsync_module` | the whole generated ids module (needs `--ids-module`) |
+| `ui.ShopIcon` | look the key up in the asset map |
+| `$module:<name>` | the whole source of a named module (see below) |
 | `$require:models.main` | `return require(<id>)`, for a stub pointing at an uploaded model |
+
+`$module` and `$rbxsync_module` still work; they are the names `assets` and
+`ids` under their old spellings.
+
+There are only two kinds of input, and the difference is what happens to the
+file rather than where it came from:
+
+```sh
+--assets output/Assets.luau              # evaluated: becomes the lookup map
+                                         # and the module named `assets`
+--module ids=src/shared/GameIds.luau     # copied verbatim into a Source
+--module env=src/shared/Env.luau         # repeatable, any name you like
+```
+
+Asphalt's output has a flag of its own only because it is the one file that is
+*both*: read as data for the map, and injectable as a module. Every other
+generated Luau file is the same kind of object and goes through `--module`,
+rather than earning a new flag each time you generate one.
+
+A config declares what it needs, so a forgotten flag fails immediately and by
+name:
+
+```
+Error: this config injects the module 'ids', which was not given;
+       pass --module ids=<path> (given: assets)
+```
+
+That check exists because the alternative is worse than it looks: without it, a
+missing input resolves nothing, reads exactly like a place that has drifted away
+from its rules, and exits zero.
 
 The type comes from the rbx-dom reflection database, not from the property name.
 That matters more than it sounds: Roblox has two content types, the modern
@@ -109,11 +138,29 @@ them. `ImageLabel.Image` is a `ContentId`, `ImageLabel.ImageContent` is a
 `Content`. Writing the wrong one makes the *serializer* fail, far from the line
 that chose it.
 
-A rule that writes a module source may create what it targets, intermediate
-`Folder`s included: the file is generated, so requiring it to already exist in
-the place would mean checking a generated stub into the `.rbxl`. The first
-segment is never created, because `ReplicatedStorge` should be an error rather
-than a new Folder sitting beside the real service.
+### What happens to the target
+
+A rule that writes a module source handles all three states it can find:
+
+| the path | what happens |
+| --- | --- |
+| exists, and can hold the property | its `Source` is replaced |
+| does not exist | created: `Folder` for the intermediate segments, `ModuleScript` for the leaf |
+| exists as something that cannot hold the property | refused, with a warning |
+
+Creating is the point: the file is generated, so requiring it to already exist
+in the place would mean checking a generated stub into the `.rbxl`. But the
+first segment is never created, because `ReplicatedStorge` should be an error
+rather than a new Folder sitting beside the real service. And nothing is created
+until the value that would fill it has resolved, or a missing input would leave
+an empty ModuleScript behind and call it a change.
+
+The third row used to be silent, which is the worst of the three: writing
+`Source` onto a `Folder` succeeds, Roblox drops the property on load, and
+nothing anywhere says so. The reflection database is what makes it visible.
+The refusal only happens when the database knows the class and says the property
+is not on it; an unknown class is a Roblox release the database has not caught
+up with, and refusing there would break a working setup.
 
 ### `keys` - set a value inside a ModuleScript's table
 

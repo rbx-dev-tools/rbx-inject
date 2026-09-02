@@ -5,13 +5,13 @@
 //! credentials, no Roblox API. That is what makes it testable, and it is why it
 //! is a separate binary from the tools that do talk to Roblox.
 
-pub mod assets;
 pub mod check;
 pub mod config;
 pub mod dom;
+pub mod inputs;
 pub mod luau;
 
-use crate::assets::Assets;
+use crate::inputs::Inputs;
 use crate::config::Config;
 use crate::luau::KeyValue;
 use rbx_dom_weak::types::Variant;
@@ -48,15 +48,15 @@ impl Report {
 /// generated asset module, and a `keys` rule elsewhere may then edit a value
 /// inside that new source. One pass would make the result depend on the order
 /// rules happen to appear in the file.
-pub fn apply(dom: &mut WeakDom, config: &Config, assets: &Assets) -> Report {
+pub fn apply(dom: &mut WeakDom, config: &Config, inputs: &Inputs) -> Report {
     let mut report = Report::default();
 
     for injection in config.active() {
-        apply_properties(dom, injection, assets, &mut report);
+        apply_properties(dom, injection, inputs, &mut report);
     }
 
     for injection in config.active() {
-        apply_keys(dom, injection, assets, &mut report);
+        apply_keys(dom, injection, inputs, &mut report);
     }
 
     report
@@ -65,7 +65,7 @@ pub fn apply(dom: &mut WeakDom, config: &Config, assets: &Assets) -> Report {
 fn apply_properties(
     dom: &mut WeakDom,
     injection: &config::Injection,
-    assets: &Assets,
+    inputs: &Inputs,
     report: &mut Report,
 ) {
     if injection.properties.is_empty() {
@@ -74,13 +74,33 @@ fn apply_properties(
 
     let path = &injection.roblox_path;
 
+    // Resolve every value before touching the place. Creating the target first
+    // and discovering afterwards that nothing resolves leaves a new, empty
+    // ModuleScript behind: a change the caller did not ask for, counted as a
+    // change, written to disk, and exiting zero.
+    let resolved: Vec<(&String, &String, Result<Resolved, String>)> = injection
+        .properties
+        .iter()
+        .map(|(prop, value_key)| (prop, value_key, resolve_property(value_key, inputs)))
+        .collect();
+
+    for (prop, _, outcome) in &resolved {
+        if let Err(e) = outcome {
+            report.warn(format!("{path}.{prop}: {e}"));
+        }
+    }
+
+    if resolved.iter().all(|(_, _, outcome)| outcome.is_err()) {
+        return;
+    }
+
     // A rule that writes a module's source can create the module: the whole
     // point is that the file is generated, so requiring it to already exist in
     // the place would mean checking a generated stub into the .rbxl. Rules that
     // only set ordinary properties target something that must already be there.
-    let writes_module_source = injection.properties.values().any(|v| {
-        v == "$module" || v == "$rbxsync_module" || v.starts_with("$require:")
-    });
+    let writes_module_source = resolved
+        .iter()
+        .any(|(_, _, outcome)| matches!(outcome, Ok(Resolved::Source(_))));
 
     let target = if writes_module_source {
         match dom::ensure(dom, path, "ModuleScript") {
@@ -105,19 +125,29 @@ fn apply_properties(
         }
     };
 
-    for (prop, value_key) in &injection.properties {
-        let resolved = match resolve_property(value_key, assets) {
-            Ok(v) => v,
-            Err(e) => {
-                report.warn(format!("{path}.{prop}: {e}"));
-                continue;
-            }
-        };
+    for (prop, value_key, outcome) in resolved {
+        let Ok(resolved) = outcome else { continue };
 
         let Some(inst) = dom.get_by_ref_mut(target) else {
             report.warn(format!("{path}.{prop}: dangling reference"));
             continue;
         };
+
+        // The target may exist already and be the wrong kind of thing: a rule
+        // writing a module's Source into a path that turns out to be a Folder
+        // would be written, dropped by Roblox on load, and reported nowhere.
+        //
+        // Only refuse when the database knows the class and says the property is
+        // not on it. An unknown class is a Roblox release the database has not
+        // caught up with, and refusing there would break a working setup.
+        let class = inst.class;
+        if dom::class_is_known(class.as_str()) && dom::declared_type(class.as_str(), prop).is_none()
+        {
+            report.warn(format!(
+                "{path}.{prop}: a {class} has no property '{prop}', skipped"
+            ));
+            continue;
+        }
 
         match resolved {
             Resolved::Source(source) => {
@@ -140,7 +170,7 @@ fn apply_properties(
 fn apply_keys(
     dom: &mut WeakDom,
     injection: &config::Injection,
-    assets: &Assets,
+    inputs: &Inputs,
     report: &mut Report,
 ) {
     if injection.keys.is_empty() {
@@ -175,7 +205,7 @@ fn apply_keys(
 
     let mut edits = Vec::with_capacity(injection.keys.len());
     for (key_path, value_key) in &injection.keys {
-        match resolve_key(value_key, assets) {
+        match resolve_key(value_key, inputs) {
             Ok(value) => {
                 report.change(format!("{path}[{key_path}] = {}", describe(&value)));
                 edits.push((key_path.clone(), value));
@@ -213,24 +243,31 @@ enum Resolved {
     Value(String),
 }
 
-/// Resolve the right-hand side of a `properties` entry.
-fn resolve_property(value_key: &str, assets: &Assets) -> Result<Resolved, String> {
-    if value_key == "$module" {
-        return assets
-            .module_source()
-            .map(|s| Resolved::Source(s.to_string()))
-            .ok_or_else(|| "$module needs --assets".to_string());
+/// The module name a `properties` value asks for, if it asks for one.
+///
+/// `$module` and `$rbxsync_module` are the two names this tool used to hardcode,
+/// kept as aliases so existing configs keep working. They are not special: a
+/// generated ids module is the same kind of object as a generated asset module,
+/// and `$module:<name>` says so.
+pub fn module_reference(value_key: &str) -> Option<&str> {
+    match value_key {
+        "$module" => Some(inputs::ASSETS),
+        "$rbxsync_module" => Some(inputs::IDS),
+        v => v.strip_prefix("$module:"),
     }
+}
 
-    if value_key == "$rbxsync_module" {
-        return assets
-            .ids_module_source()
+/// Resolve the right-hand side of a `properties` entry.
+fn resolve_property(value_key: &str, inputs: &Inputs) -> Result<Resolved, String> {
+    if let Some(name) = module_reference(value_key) {
+        return inputs
+            .module(name)
             .map(|s| Resolved::Source(s.to_string()))
-            .ok_or_else(|| "$rbxsync_module needs --ids-module".to_string());
+            .ok_or_else(|| format!("no module named '{name}' was given"));
     }
 
     if let Some(key) = value_key.strip_prefix("$require:") {
-        let resolved = assets
+        let resolved = inputs
             .get(key)
             .ok_or_else(|| format!("'{key}' is not in the asset map"))?;
 
@@ -245,7 +282,7 @@ fn resolve_property(value_key: &str, assets: &Assets) -> Result<Resolved, String
         return Ok(Resolved::Source(format!("return require({id})\n")));
     }
 
-    assets
+    inputs
         .get(value_key)
         .map(|v| Resolved::Value(v.to_string()))
         .ok_or_else(|| format!("'{value_key}' is not in the asset map"))
@@ -256,7 +293,7 @@ fn resolve_property(value_key: &str, assets: &Assets) -> Result<Resolved, String
 /// A bare value is always an asset-map lookup, so that the common case stays
 /// short. `$$` forces a literal string, which is the escape hatch for a value
 /// that happens to look like a key.
-fn resolve_key(value_key: &str, assets: &Assets) -> Result<KeyValue, String> {
+fn resolve_key(value_key: &str, inputs: &Inputs) -> Result<KeyValue, String> {
     if let Some(literal) = value_key.strip_prefix("$$") {
         return Ok(KeyValue::Str(literal.to_string()));
     }
@@ -273,7 +310,7 @@ fn resolve_key(value_key: &str, assets: &Assets) -> Result<KeyValue, String> {
         });
     }
 
-    assets
+    inputs
         .get(value_key)
         .map(|v| KeyValue::Str(v.to_string()))
         .ok_or_else(|| format!("'{value_key}' is not in the asset map"))
@@ -288,10 +325,9 @@ fn describe(value: &KeyValue) -> String {
     }
 }
 
-fn describe_source(value_key: &str) -> &str {
-    match value_key {
-        "$module" => "[asset module]",
-        "$rbxsync_module" => "[ids module]",
-        _ => "[require stub]",
+fn describe_source(value_key: &str) -> String {
+    match module_reference(value_key) {
+        Some(name) => format!("[module '{name}']"),
+        None => "[require stub]".to_string(),
     }
 }

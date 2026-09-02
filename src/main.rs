@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use rbx_inject::{apply, assets::Assets, check::Severity, config::Config};
+use rbx_inject::{apply, check::Severity, config::Config, inputs, inputs::Inputs};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -38,11 +38,19 @@ struct Apply {
     #[arg(long, value_name = "PATH")]
     config: PathBuf,
 
-    /// Asphalt output (Assets.luau): the asset map, and the source for $module.
+    /// Asphalt output (Assets.luau). Read as data for the asset map, and
+    /// registered as the module named `assets`, which is what `$module` means.
     #[arg(long, value_name = "PATH")]
     assets: Option<PathBuf>,
 
-    /// Generated ids module, for $rbxsync_module.
+    /// Register a generated Luau file as an injectable module source:
+    /// `--module ids=src/shared/GameIds.luau`, injected with `$module:ids`.
+    /// Repeatable.
+    #[arg(long, value_name = "NAME=PATH")]
+    module: Vec<String>,
+
+    /// Shorthand for `--module ids=<PATH>`, which is what `$rbxsync_module`
+    /// means.
     #[arg(long, value_name = "PATH", alias = "rbxsync-module")]
     ids_module: Option<PathBuf>,
 
@@ -108,13 +116,15 @@ fn run_check(args: Check) -> Result<()> {
     let config = Config::load(&args.config)?;
     let dom = read_place(&args.place)?;
 
-    let assets = args
-        .assets
-        .as_deref()
-        .map(Assets::from_asphalt)
-        .transpose()?;
+    // Deliberately not `require_inputs`: running with no asset map at all is the
+    // point of `check`, so that a pre-commit hook can validate paths long before
+    // anything has been uploaded.
+    let inputs = match &args.assets {
+        Some(path) => Some(Inputs::default().with_asphalt(path)?),
+        None => None,
+    };
 
-    let findings = rbx_inject::check::check(&dom, &config, assets.as_ref());
+    let findings = rbx_inject::check::check(&dom, &config, inputs.as_ref());
 
     let rules = config.active().count();
     let errors = findings
@@ -141,19 +151,86 @@ fn run_check(args: Check) -> Result<()> {
     Ok(())
 }
 
-fn run_apply(args: Apply) -> Result<()> {
-    let config = Config::load(&args.config)?;
+/// `name=path`, the shape of a `--module` argument.
+fn parse_module_arg(arg: &str) -> Result<(String, PathBuf)> {
+    let (name, path) = arg
+        .split_once('=')
+        .with_context(|| format!("--module wants NAME=PATH, got '{arg}'"))?;
 
-    let mut assets = match &args.assets {
-        Some(path) => Assets::from_asphalt(path)?,
-        None => Assets::default(),
-    };
-    if let Some(path) = &args.ids_module {
-        assets = assets.with_ids_module(path)?;
+    if name.is_empty() {
+        bail!("--module wants a name before the '=', got '{arg}'");
     }
 
+    Ok((name.to_string(), PathBuf::from(path)))
+}
+
+fn build_inputs(
+    assets: Option<&Path>,
+    ids_module: Option<&Path>,
+    modules: &[String],
+) -> Result<Inputs> {
+    let mut inputs = Inputs::default();
+
+    if let Some(path) = assets {
+        inputs = inputs.with_asphalt(path)?;
+    }
+    if let Some(path) = ids_module {
+        inputs = inputs.with_module(inputs::IDS, path)?;
+    }
+    for arg in modules {
+        let (name, path) = parse_module_arg(arg)?;
+        inputs = inputs.with_module(&name, &path)?;
+    }
+
+    Ok(inputs)
+}
+
+/// Refuse before touching the place when an input the config needs is missing.
+///
+/// Without this, a forgotten `--assets` resolves nothing and reads exactly like
+/// a place that has drifted away from its rules: a wall of warnings, an exit
+/// code of zero, and a deploy that carries on.
+fn require_inputs(config: &Config, inputs: &Inputs) -> Result<()> {
+    let needs = config.needs();
+
+    if needs.asset_map && !inputs.has_map() {
+        bail!(
+            "this config looks keys up in the asset map; pass --assets <asphalt's Assets.luau>"
+        );
+    }
+
+    for name in &needs.modules {
+        if inputs.module(name).is_none() {
+            let hint = match name.as_str() {
+                inputs::ASSETS => "--assets <path>".to_string(),
+                other => format!("--module {other}=<path>"),
+            };
+            let known: Vec<&str> = inputs.module_names().collect();
+            bail!(
+                "this config injects the module '{name}', which was not given; pass {hint}{}",
+                if known.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (given: {})", known.join(", "))
+                }
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn run_apply(args: Apply) -> Result<()> {
+    let config = Config::load(&args.config)?;
+    let inputs = build_inputs(
+        args.assets.as_deref(),
+        args.ids_module.as_deref(),
+        &args.module,
+    )?;
+    require_inputs(&config, &inputs)?;
+
     let mut dom = read_place(&args.place)?;
-    let report = apply(&mut dom, &config, &assets);
+    let report = apply(&mut dom, &config, &inputs);
 
     for line in &report.changes {
         println!("  {line}");

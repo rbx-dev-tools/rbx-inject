@@ -1,7 +1,7 @@
 //! `check` is the drift alarm, so its tests are about what drifts.
 
 use rbx_dom_weak::{InstanceBuilder, WeakDom};
-use rbx_inject::assets::Assets;
+use rbx_inject::inputs::Inputs;
 use rbx_inject::check::{check, Severity};
 use rbx_inject::config::Config;
 
@@ -26,8 +26,8 @@ fn config(json: &str) -> Config {
     serde_json::from_str(json).expect("test config should parse")
 }
 
-fn assets() -> Assets {
-    Assets::from_pairs([("ui.ShopIcon", "rbxassetid://111")])
+fn inputs() -> Inputs {
+    Inputs::from_pairs([("ui.ShopIcon", "rbxassetid://111")])
 }
 
 fn errors(findings: &[rbx_inject::check::Finding]) -> Vec<String> {
@@ -48,7 +48,7 @@ fn a_place_matching_its_config_reports_nothing() {
                 {"robloxPath":"ReplicatedStorage.GameConfig","keys":{"Volume":"$0.5"}}
             ]}"#,
         ),
-        Some(&assets()),
+        Some(&inputs()),
     );
 
     assert!(findings.is_empty(), "{findings:?}");
@@ -65,7 +65,7 @@ fn a_renamed_instance_is_an_error() {
                 {"robloxPath":"StarterGui.OldIconName","properties":{"Image":"ui.ShopIcon"}}
             ]}"#,
         ),
-        Some(&assets()),
+        Some(&inputs()),
     );
 
     let errors = errors(&findings);
@@ -101,7 +101,7 @@ fn missing_asset_keys_are_only_checked_when_a_map_is_given() {
     );
 
     assert!(check(&place(), &cfg, None).is_empty());
-    assert_eq!(errors(&check(&place(), &cfg, Some(&assets()))).len(), 1);
+    assert_eq!(errors(&check(&place(), &cfg, Some(&inputs()))).len(), 1);
 }
 
 /// A property name Roblox does not have is written, then dropped on load, with
@@ -116,7 +116,7 @@ fn a_misspelled_property_warns() {
                 {"robloxPath":"StarterGui.Icon","properties":{"Imagee":"ui.ShopIcon"}}
             ]}"#,
         ),
-        Some(&assets()),
+        Some(&inputs()),
     );
 
     assert!(errors(&findings).is_empty(), "{findings:?}");

@@ -96,6 +96,17 @@ pub fn variant_for(inst: &Instance, prop_name: &str, value: &str) -> Variant {
     }
 }
 
+/// Whether the reflection database knows this class at all.
+///
+/// The distinction matters wherever a missing property decides something: an
+/// unknown *property* on a known class is a mistake, while an unknown *class* is
+/// a Roblox release the database has not caught up with.
+pub fn class_is_known(class_name: &str) -> bool {
+    rbx_reflection_database::get()
+        .ok()
+        .is_some_and(|db| db.classes.contains_key(class_name))
+}
+
 /// The type the reflection database declares for `class.prop`, walking up the
 /// superclass chain. `None` when either is unknown to the database.
 pub fn declared_type(class_name: &str, prop_name: &str) -> Option<VariantType> {

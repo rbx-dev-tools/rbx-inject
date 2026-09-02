@@ -1,30 +1,48 @@
-//! The asset map: what `ui.ShopIcon` resolves to.
+//! What an injection can resolve against.
+//!
+//! Two different things, deliberately not one flag:
+//!
+//! - **the map**, which is *evaluated*: asphalt's output, read as data, so that
+//!   `ui.ShopIcon` resolves to an id.
+//! - **modules**, which are *copied verbatim*: any generated Luau file whose
+//!   whole text goes into a ModuleScript's `Source`.
+//!
+//! Asphalt's output happens to be both, and that is the only reason it has a
+//! flag of its own. Every other generated module (a shop ids module, an env
+//! module, a build-info module) is the same kind of object and goes through the
+//! same generic mechanism, rather than earning a new flag each time.
 
 use anyhow::{bail, Context, Result};
 use mlua::{Lua, Table, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Everything an injection can look a value up in.
+/// The conventional name for asphalt's output, so `$module` keeps meaning what
+/// it always meant.
+pub const ASSETS: &str = "assets";
+
+/// The conventional name for the generated shop/ids module, so
+/// `$rbxsync_module` keeps meaning what it always meant.
+pub const IDS: &str = "ids";
+
 #[derive(Debug, Default)]
-pub struct Assets {
-    /// Flattened asphalt output: `"audio.Bang" -> "rbxassetid://123"`.
+pub struct Inputs {
+    /// Flattened lookup map: `"audio.Bang" -> "rbxassetid://123"`.
     map: BTreeMap<String, String>,
-    /// Verbatim source of the asphalt module, for `$module`.
-    module_source: Option<String>,
-    /// Verbatim source of the generated shop/ids module, for `$rbxsync_module`.
-    ids_module_source: Option<String>,
+    /// Named module sources, copied verbatim into a `Source`.
+    modules: BTreeMap<String, String>,
 }
 
-impl Assets {
-    /// Read an asphalt-generated `Assets.luau`.
+impl Inputs {
+    /// Read asphalt's `Assets.luau`: both the lookup map and the module named
+    /// [`ASSETS`].
     ///
     /// The file is *evaluated*, not scanned line by line. The previous
     /// implementation matched `name = "rbxassetid://…"` with string prefixes,
     /// which quietly dropped anything nested more than two levels deep, anything
     /// written on one line, and anything with a comment after it. Asphalt emits
     /// Luau; the only parser guaranteed to agree with asphalt is Luau.
-    pub fn from_asphalt(path: &Path) -> Result<Self> {
+    pub fn with_asphalt(mut self, path: &Path) -> Result<Self> {
         let source = std::fs::read_to_string(path)
             .with_context(|| format!("reading asphalt output {}", path.display()))?;
 
@@ -36,29 +54,20 @@ impl Assets {
             .with_context(|| format!("evaluating asphalt output {}", path.display()))?;
 
         let Value::Table(table) = value else {
-            bail!(
-                "asphalt output {} did not return a table",
-                path.display()
-            );
+            bail!("asphalt output {} did not return a table", path.display());
         };
 
-        let mut map = BTreeMap::new();
-        flatten(&table, "", &mut map)?;
+        flatten(&table, "", &mut self.map)?;
+        self.modules.insert(ASSETS.to_string(), source);
 
-        Ok(Self {
-            map,
-            module_source: Some(source),
-            ids_module_source: None,
-        })
+        Ok(self)
     }
 
-    /// Register the generated ids module (`rbx shop codegen`, or rbxsync's
-    /// output) so `$rbxsync_module` can resolve to its source.
-    pub fn with_ids_module(mut self, path: &Path) -> Result<Self> {
-        self.ids_module_source = Some(
-            std::fs::read_to_string(path)
-                .with_context(|| format!("reading ids module {}", path.display()))?,
-        );
+    /// Register any file as an injectable module source, under `name`.
+    pub fn with_module(mut self, name: &str, path: &Path) -> Result<Self> {
+        let source = std::fs::read_to_string(path)
+            .with_context(|| format!("reading module '{name}' from {}", path.display()))?;
+        self.modules.insert(name.to_string(), source);
         Ok(self)
     }
 
@@ -66,17 +75,17 @@ impl Assets {
         self.map.get(key).map(String::as_str)
     }
 
-    pub fn module_source(&self) -> Option<&str> {
-        self.module_source.as_deref()
+    pub fn module(&self, name: &str) -> Option<&str> {
+        self.modules.get(name).map(String::as_str)
     }
 
-    pub fn ids_module_source(&self) -> Option<&str> {
-        self.ids_module_source.as_deref()
+    pub fn has_map(&self) -> bool {
+        !self.map.is_empty()
     }
 
-    /// Every key, for error messages that suggest what the user meant.
-    pub fn keys(&self) -> impl Iterator<Item = &str> {
-        self.map.keys().map(String::as_str)
+    /// Every registered module name, for error messages that say what is there.
+    pub fn module_names(&self) -> impl Iterator<Item = &str> {
+        self.modules.keys().map(String::as_str)
     }
 
     /// Build a map directly, for callers that already have one and for tests.
@@ -91,14 +100,13 @@ impl Assets {
                 .into_iter()
                 .map(|(k, v)| (k.into(), v.into()))
                 .collect(),
-            module_source: None,
-            ids_module_source: None,
+            modules: BTreeMap::new(),
         }
     }
 
-    /// Set the `$module` source without reading a file.
-    pub fn with_module_source(mut self, source: impl Into<String>) -> Self {
-        self.module_source = Some(source.into());
+    /// Register a module source without reading a file.
+    pub fn with_module_source(mut self, name: &str, source: impl Into<String>) -> Self {
+        self.modules.insert(name.to_string(), source.into());
         self
     }
 }

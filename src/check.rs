@@ -9,7 +9,7 @@
 //! credentials, so it runs in a pre-commit hook or in CI, the day the rename
 //! happens rather than at the next deploy.
 
-use crate::assets::Assets;
+use crate::inputs::Inputs;
 use crate::config::{Config, Injection};
 use crate::dom;
 use rbx_dom_weak::types::Variant;
@@ -48,12 +48,12 @@ impl fmt::Display for Finding {
 
 /// Check every rule. `assets` is optional: without it, asset-map lookups are not
 /// checked, which is the point of being able to run before anything is uploaded.
-pub fn check(dom: &WeakDom, config: &Config, assets: Option<&Assets>) -> Vec<Finding> {
+pub fn check(dom: &WeakDom, config: &Config, inputs: Option<&Inputs>) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     for injection in config.active() {
-        check_properties(dom, injection, assets, &mut findings);
-        check_keys(dom, injection, assets, &mut findings);
+        check_properties(dom, injection, inputs, &mut findings);
+        check_keys(dom, injection, inputs, &mut findings);
     }
 
     findings
@@ -62,7 +62,7 @@ pub fn check(dom: &WeakDom, config: &Config, assets: Option<&Assets>) -> Vec<Fin
 fn check_properties(
     dom: &WeakDom,
     injection: &Injection,
-    assets: Option<&Assets>,
+    inputs: Option<&Inputs>,
     findings: &mut Vec<Finding>,
 ) {
     if injection.properties.is_empty() {
@@ -71,10 +71,9 @@ fn check_properties(
 
     let path = &injection.roblox_path;
 
-    let creates = injection
-        .properties
-        .values()
-        .any(|v| v == "$module" || v == "$rbxsync_module" || v.starts_with("$require:"));
+    let creates = injection.properties.values().any(|v| {
+        crate::module_reference(v).is_some() || v.starts_with("$require:")
+    });
 
     let target = dom::find(dom, path);
 
@@ -118,14 +117,14 @@ fn check_properties(
             });
         }
 
-        check_value(assets, value_key, &format!("{path}.{prop}"), findings);
+        check_value(inputs, value_key, &format!("{path}.{prop}"), findings);
     }
 }
 
 fn check_keys(
     dom: &WeakDom,
     injection: &Injection,
-    assets: Option<&Assets>,
+    inputs: Option<&Inputs>,
     findings: &mut Vec<Finding>,
 ) {
     if injection.keys.is_empty() {
@@ -181,30 +180,32 @@ fn check_keys(
     }
 
     for (key_path, value_key) in &injection.keys {
-        check_value(assets, value_key, &format!("{path}[{key_path}]"), findings);
+        check_value(inputs, value_key, &format!("{path}[{key_path}]"), findings);
     }
 }
 
 /// Asset-map lookups, only when a map was supplied.
 fn check_value(
-    assets: Option<&Assets>,
+    inputs: Option<&Inputs>,
     value_key: &str,
     target: &str,
     findings: &mut Vec<Finding>,
 ) {
-    let Some(assets) = assets else { return };
+    let Some(inputs) = inputs else { return };
 
-    // Everything with a `$` prefix is a literal or a module source, not a lookup.
-    let lookup = match value_key {
-        "$module" | "$rbxsync_module" => return,
-        v => match v.strip_prefix("$require:") {
-            Some(key) => key,
-            None if v.starts_with('$') => return,
-            None => v,
-        },
+    // A module reference names a file, not a key in the map.
+    if crate::module_reference(value_key).is_some() {
+        return;
+    }
+
+    // Everything else with a `$` prefix is a literal.
+    let lookup = match value_key.strip_prefix("$require:") {
+        Some(key) => key,
+        None if value_key.starts_with('$') => return,
+        None => value_key,
     };
 
-    if assets.get(lookup).is_none() {
+    if inputs.get(lookup).is_none() {
         findings.push(Finding {
             severity: Severity::Error,
             target: target.to_string(),

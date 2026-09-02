@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// A whole injections file. Unknown fields are ignored on purpose: rbx-deck's
@@ -69,4 +69,39 @@ impl Config {
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string_pretty(self).context("rendering TOML")
     }
+
+    /// What this config needs to be applied at all.
+    ///
+    /// Checked before the place is touched, so that a forgotten `--assets`
+    /// fails immediately and by name, instead of resolving nothing and looking
+    /// exactly like a place that has drifted away from its rules.
+    pub fn needs(&self) -> Needs {
+        let mut needs = Needs::default();
+
+        for injection in self.active() {
+            for value in injection.properties.values() {
+                if let Some(name) = crate::module_reference(value) {
+                    needs.modules.insert(name.to_string());
+                } else if !value.starts_with('$') || value.starts_with("$require:") {
+                    needs.asset_map = true;
+                }
+            }
+
+            // In `keys`, everything with a `$` prefix is a literal.
+            if injection.keys.values().any(|v| !v.starts_with('$')) {
+                needs.asset_map = true;
+            }
+        }
+
+        needs
+    }
+}
+
+/// The inputs a config cannot be applied without.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Needs {
+    /// A rule looks a key up in the asset map.
+    pub asset_map: bool,
+    /// Names of the module sources rules ask for, e.g. `assets`, `ids`.
+    pub modules: BTreeSet<String>,
 }

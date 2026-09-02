@@ -6,7 +6,7 @@
 
 use rbx_dom_weak::types::Variant;
 use rbx_dom_weak::{ustr, InstanceBuilder, WeakDom};
-use rbx_inject::{apply, assets::Assets, config::Config, Report};
+use rbx_inject::{apply, config::Config, inputs::Inputs, Report};
 
 /// A place with the shapes the rules target: a config module, an image, a sound.
 fn place() -> WeakDom {
@@ -30,8 +30,8 @@ fn place() -> WeakDom {
     )
 }
 
-fn assets() -> Assets {
-    Assets::from_pairs([
+fn inputs() -> Inputs {
+    Inputs::from_pairs([
         ("ui.ShopIcon", "rbxassetid://111"),
         ("audio.Bang", "rbxassetid://222"),
         ("models.main", "rbxassetid://333"),
@@ -111,7 +111,7 @@ fn image_gets_the_type_the_database_declares() {
                 {"robloxPath":"StarterGui.Icon","properties":{"Image":"ui.ShopIcon"}}
             ]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
@@ -143,7 +143,7 @@ fn reading_back_applies_robloxs_property_migration() {
                 {"robloxPath":"StarterGui.Icon","properties":{"Image":"ui.ShopIcon"}}
             ]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     let reread = round_trip(&dom);
@@ -167,7 +167,7 @@ fn sound_id_is_written_and_survives_a_round_trip() {
                 {"robloxPath":"StarterGui.Bang","properties":{"SoundId":"audio.Bang"}}
             ]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     let reread = round_trip(&dom);
@@ -183,7 +183,7 @@ fn sound_id_is_written_and_survives_a_round_trip() {
 #[test]
 fn module_source_creates_the_missing_module_script() {
     let mut dom = place();
-    let assets = assets().with_module_source("return { ui = { ShopIcon = \"rbxassetid://111\" } }");
+    let inputs = inputs().with_module_source("assets", "return { ui = { ShopIcon = \"rbxassetid://111\" } }");
 
     let report = apply(
         &mut dom,
@@ -192,7 +192,7 @@ fn module_source_creates_the_missing_module_script() {
                 {"robloxPath":"ReplicatedStorage.Generated.Assets","properties":{"Source":"$module"}}
             ]}"#,
         ),
-        &assets,
+        &inputs,
     );
 
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
@@ -201,6 +201,149 @@ fn module_source_creates_the_missing_module_script() {
     // The intermediate segment becomes a Folder, the leaf a ModuleScript.
     let folder = rbx_inject::dom::find(&dom, "ReplicatedStorage.Generated").unwrap();
     assert_eq!(dom.get_by_ref(folder).unwrap().class.as_str(), "Folder");
+}
+
+/// The other half of the same rule: when the module is already in the place,
+/// its Source is replaced rather than a second one being created beside it.
+#[test]
+fn module_source_overwrites_a_module_that_already_exists() {
+    let mut dom = place();
+    let inputs = inputs().with_module_source("assets", "return { fresh = true }");
+
+    let report = apply(
+        &mut dom,
+        &config(
+            r#"{"injections":[
+                {"robloxPath":"ReplicatedStorage.GameConfig","properties":{"Source":"$module"}}
+            ]}"#,
+        ),
+        &inputs,
+    );
+
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_eq!(
+        source(&dom, "ReplicatedStorage.GameConfig"),
+        "return { fresh = true }"
+    );
+
+    // One module, not two: nothing was created beside the existing one.
+    let parent = rbx_inject::dom::find(&dom, "ReplicatedStorage").unwrap();
+    let named: Vec<_> = dom
+        .get_by_ref(parent)
+        .unwrap()
+        .children()
+        .iter()
+        .filter(|r| dom.get_by_ref(**r).is_some_and(|i| i.name == "GameConfig"))
+        .collect();
+    assert_eq!(named.len(), 1);
+}
+
+/// The third case, and the one that used to be silent: the path exists, but as
+/// the wrong kind of thing. A Folder has no Source, so Roblox would drop the
+/// property on load and nothing would say so.
+#[test]
+fn a_module_rule_aimed_at_a_folder_is_refused() {
+    let mut dom = WeakDom::new(
+        InstanceBuilder::new("DataModel").with_child(
+            InstanceBuilder::new("ReplicatedStorage")
+                .with_child(InstanceBuilder::new("Folder").with_name("GameIds")),
+        ),
+    );
+
+    let report = apply(
+        &mut dom,
+        &config(
+            r#"{"injections":[
+                {"robloxPath":"ReplicatedStorage.GameIds","properties":{"Source":"$module"}}
+            ]}"#,
+        ),
+        &inputs().with_module_source("assets", "return {}"),
+    );
+
+    assert!(!report.changed(), "{:?}", report.changes);
+    assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+    assert!(
+        report.warnings[0].contains("Folder has no property 'Source'"),
+        "{:?}",
+        report.warnings
+    );
+}
+
+/// A missing input must not leave a new empty ModuleScript behind. Before this,
+/// forgetting `--assets` created the target, failed to fill it, counted that as
+/// a change, and wrote the file.
+#[test]
+fn a_rule_whose_module_is_missing_creates_nothing() {
+    let mut dom = place();
+
+    let report = apply(
+        &mut dom,
+        &config(
+            r#"{"injections":[
+                {"robloxPath":"ReplicatedStorage.GameIds","properties":{"Source":"$module"}}
+            ]}"#,
+        ),
+        &inputs(),
+    );
+
+    assert!(!report.changed(), "{:?}", report.changes);
+    assert!(rbx_inject::dom::find(&dom, "ReplicatedStorage.GameIds").is_none());
+}
+
+/// A generated ids module is the same kind of object as a generated asset
+/// module, so it goes through the same generic mechanism under any name.
+#[test]
+fn any_named_module_can_be_injected() {
+    let mut dom = place();
+    let inputs = inputs()
+        .with_module_source("ids", "return { Passes = { VIP = 1 } }")
+        .with_module_source("env", "return { Name = \"dev\" }");
+
+    let report = apply(
+        &mut dom,
+        &config(
+            r#"{"injections":[
+                {"robloxPath":"ReplicatedStorage.GameIds","properties":{"Source":"$rbxsync_module"}},
+                {"robloxPath":"ReplicatedStorage.Env","properties":{"Source":"$module:env"}}
+            ]}"#,
+        ),
+        &inputs,
+    );
+
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    // `$rbxsync_module` is just the module named `ids` under its old spelling.
+    assert!(source(&dom, "ReplicatedStorage.GameIds").contains("VIP"));
+    assert!(source(&dom, "ReplicatedStorage.Env").contains("dev"));
+}
+
+/// The config says what it needs, so the CLI can refuse before touching the
+/// place instead of emitting warnings that look like drift.
+#[test]
+fn a_config_reports_the_inputs_it_needs() {
+    let needs = config(
+        r#"{"injections":[
+            {"robloxPath":"a.b","properties":{"Image":"ui.Icon"}},
+            {"robloxPath":"a.c","properties":{"Source":"$module"}},
+            {"robloxPath":"a.d","properties":{"Source":"$module:env"}},
+            {"robloxPath":"a.e","properties":{"Source":"$rbxsync_module"}}
+        ]}"#,
+    )
+    .needs();
+
+    assert!(needs.asset_map);
+    assert_eq!(
+        needs.modules.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["assets", "env", "ids"]
+    );
+
+    // Literals need nothing at all, so a config of only literals must not
+    // demand an asset map it never reads.
+    let literals = config(
+        r#"{"injections":[{"robloxPath":"a.b","keys":{"Volume":"$0.5","Name":"$$x"}}]}"#,
+    )
+    .needs();
+    assert!(!literals.asset_map);
+    assert!(literals.modules.is_empty());
 }
 
 #[test]
@@ -213,7 +356,7 @@ fn require_stub_points_at_the_uploaded_model() {
                 {"robloxPath":"ReplicatedStorage.Main","properties":{"Source":"$require:models.main"}}
             ]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     assert_eq!(
@@ -234,7 +377,7 @@ fn an_unknown_service_is_refused_not_created() {
                 {"robloxPath":"ReplicatedStorge.Assets","properties":{"Source":"$module"}}
             ]}"#,
         ),
-        &assets().with_module_source("return {}"),
+        &inputs().with_module_source("assets", "return {}"),
     );
 
     assert!(rbx_inject::dom::find(&dom, "ReplicatedStorge").is_none());
@@ -252,7 +395,7 @@ fn a_missing_instance_warns_and_leaves_the_place_alone() {
                 {"robloxPath":"StarterGui.Nope","properties":{"Image":"ui.ShopIcon"}}
             ]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     assert!(!report.changed());
@@ -269,7 +412,7 @@ fn a_missing_asset_key_warns_and_names_the_key() {
                 {"robloxPath":"StarterGui.Icon","properties":{"Image":"ui.Typo"}}
             ]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     assert!(!report.changed());
@@ -291,7 +434,7 @@ fn keys_edit_nested_values_and_keep_the_rest() {
                 "GameName": "$$My Game"
             }}]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
@@ -316,7 +459,7 @@ fn a_rewritten_module_is_still_valid_luau() {
                 "Weird.end": "$$keyword"
             }}]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     // Feed the output back through the same evaluator: if the printer emitted a
@@ -337,7 +480,7 @@ fn nil_removes_a_key() {
             r#"{"injections":[{"robloxPath":"ReplicatedStorage.GameConfig",
                 "keys":{"Settings.Volume":"$nil"}}]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     assert!(!source(&dom, "ReplicatedStorage.GameConfig").contains("Volume"));
@@ -351,7 +494,7 @@ fn keys_on_a_non_module_warn_rather_than_corrupt() {
         &config(
             r#"{"injections":[{"robloxPath":"StarterGui.Icon","keys":{"a":"$1"}}]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     assert!(!report.changed());
@@ -363,7 +506,7 @@ fn keys_on_a_non_module_warn_rather_than_corrupt() {
 #[test]
 fn a_replaced_source_is_what_keys_edit() {
     let mut dom = place();
-    let assets = assets().with_module_source("return { Volume = 1, Name = \"stale\" }");
+    let inputs = inputs().with_module_source("assets", "return { Volume = 1, Name = \"stale\" }");
 
     apply(
         &mut dom,
@@ -373,7 +516,7 @@ fn a_replaced_source_is_what_keys_edit() {
                 {"robloxPath":"ReplicatedStorage.GameConfig","keys":{"Name":"$$fresh"}}
             ]}"#,
         ),
-        &assets,
+        &inputs,
     );
 
     let out = source(&dom, "ReplicatedStorage.GameConfig");
@@ -390,10 +533,10 @@ fn a_second_run_changes_nothing() {
     }}]}"#;
 
     let mut dom = place();
-    apply(&mut dom, &config(rules), &assets());
+    apply(&mut dom, &config(rules), &inputs());
     let first = source(&dom, "ReplicatedStorage.GameConfig");
 
-    apply(&mut dom, &config(rules), &assets());
+    apply(&mut dom, &config(rules), &inputs());
     let second = source(&dom, "ReplicatedStorage.GameConfig");
 
     assert_eq!(first, second);
@@ -416,8 +559,8 @@ fn the_same_rules_in_json_and_toml_mean_the_same_thing() {
 
     let mut a = place();
     let mut b = place();
-    apply(&mut a, &json, &assets());
-    apply(&mut b, &from_toml, &assets());
+    apply(&mut a, &json, &inputs());
+    apply(&mut b, &from_toml, &inputs());
 
     assert_eq!(
         source(&a, "ReplicatedStorage.GameConfig"),
@@ -441,7 +584,7 @@ fn the_asset_map_flattens_to_any_depth() {
                 {"robloxPath":"StarterGui.Icon","properties":{"Image":"deep.nested.value"}}
             ]}"#,
         ),
-        &assets(),
+        &inputs(),
     );
 
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
@@ -454,7 +597,7 @@ fn the_asset_map_flattens_to_any_depth() {
 #[test]
 fn an_empty_report_means_an_untouched_place() {
     let mut dom = place();
-    let report: Report = apply(&mut dom, &Config::default(), &assets());
+    let report: Report = apply(&mut dom, &Config::default(), &inputs());
     assert!(!report.changed());
     assert!(report.warnings.is_empty());
 }
