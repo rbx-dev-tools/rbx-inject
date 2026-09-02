@@ -9,9 +9,9 @@
 //! credentials, so it runs in a pre-commit hook or in CI, the day the rename
 //! happens rather than at the next deploy.
 
-use crate::inputs::Inputs;
 use crate::config::{Config, Injection};
 use crate::dom;
+use crate::inputs::Inputs;
 use rbx_dom_weak::types::Variant;
 use rbx_dom_weak::{ustr, WeakDom};
 use std::fmt;
@@ -71,9 +71,10 @@ fn check_properties(
 
     let path = &injection.roblox_path;
 
-    let creates = injection.properties.values().any(|v| {
-        crate::module_reference(v).is_some() || v.starts_with("$require:")
-    });
+    let creates = injection
+        .properties
+        .values()
+        .any(|v| crate::module_reference(v).is_some() || v.starts_with("$require:"));
 
     let target = dom::find(dom, path);
 

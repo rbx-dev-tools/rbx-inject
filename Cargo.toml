@@ -2,10 +2,27 @@
 name = "rbx-inject"
 version = "0.1.0"
 edition = "2021"
-description = "Inject asset ids and config values into a Roblox place file, before you upload it"
+# Set by a dependency, not by our code: our own sources compile well below this.
+# 1.85 is the highest `rust-version` in the resolved graph (hashbrown 0.17,
+# indexmap 2.14, rmp-serde and clap_lex all declare it). It moves when a
+# dependency moves it; the `msrv` CI job is what stops it moving silently.
+rust-version = "1.85"
 license = "MPL-2.0"
+description = "Inject asset ids and config values into a Roblox place file, before you upload it"
+repository = "https://github.com/rbx-dev-tools/rbx-inject"
+homepage = "https://github.com/rbx-dev-tools/rbx-inject"
+authors = ["rbx-forge"]
 keywords = ["roblox", "rbxl", "assets", "deployment"]
 categories = ["command-line-utilities", "game-development"]
+readme = "README.md"
+
+[lib]
+name = "rbx_inject"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rbx-inject"
+path = "src/main.rs"
 
 [dependencies]
 # The one tool in the chain that parses Roblox's binary format. It lives in its
@@ -34,10 +51,23 @@ serde_json = "1"
 toml = "0.8"
 anyhow = "1"
 
-[lints.rust]
-unsafe_code = "warn"
-
+# Release profile tuned for a distributed CLI binary. Slower to compile, but
+# the binary is smaller and starts faster.
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[lints.rust]
+unsafe_code = "warn"
+missing_debug_implementations = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+# Default-on lints stay at their default level. Restriction-group lints like
+# `unwrap_used` are deliberately not enabled: too much noise on patterns that
+# are correct by construction.
+todo = "warn"
+dbg_macro = "warn"
+print_stdout = "allow"   # CLI tool, println! is intentional
+print_stderr = "allow"

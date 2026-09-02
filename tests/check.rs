@@ -1,9 +1,9 @@
 //! `check` is the drift alarm, so its tests are about what drifts.
 
 use rbx_dom_weak::{InstanceBuilder, WeakDom};
-use rbx_inject::inputs::Inputs;
 use rbx_inject::check::{check, Severity};
 use rbx_inject::config::Config;
+use rbx_inject::inputs::Inputs;
 
 fn place() -> WeakDom {
     WeakDom::new(
@@ -161,7 +161,10 @@ fn keys_on_a_non_module_are_an_error() {
         None,
     );
 
-    assert!(errors(&findings)[0].contains("ModuleScript"), "{findings:?}");
+    assert!(
+        errors(&findings)[0].contains("ModuleScript"),
+        "{findings:?}"
+    );
 }
 
 /// A module whose source does not evaluate to a table cannot be rewritten. Catch

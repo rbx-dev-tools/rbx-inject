@@ -42,8 +42,7 @@ pub fn apply_keys(source: &str, edits: &[(String, KeyValue)]) -> Result<String> 
     };
 
     for (path, value) in edits {
-        set_nested(&lua, &table, path, value)
-            .with_context(|| format!("setting key '{path}'"))?;
+        set_nested(&lua, &table, path, value).with_context(|| format!("setting key '{path}'"))?;
     }
 
     Ok(format!("return {}\n", serialize(&table, "")?))
@@ -191,10 +190,7 @@ fn serialize_value(value: &Value, indent: &str) -> Result<String> {
         // Functions, userdata and threads have no source form. A module holding
         // one is a config table with logic in it, and rewriting it would silently
         // drop that logic, so refuse instead.
-        other => bail!(
-            "cannot write a {} back to source",
-            other.type_name()
-        ),
+        other => bail!("cannot write a {} back to source", other.type_name()),
     })
 }
 
@@ -218,9 +214,30 @@ fn is_identifier(s: &str) -> bool {
 fn is_keyword(s: &str) -> bool {
     matches!(
         s,
-        "and" | "break" | "do" | "else" | "elseif" | "end" | "false" | "for" | "function"
-            | "if" | "in" | "local" | "nil" | "not" | "or" | "repeat" | "return" | "then"
-            | "true" | "until" | "while" | "continue" | "export" | "type"
+        "and"
+            | "break"
+            | "do"
+            | "else"
+            | "elseif"
+            | "end"
+            | "false"
+            | "for"
+            | "function"
+            | "if"
+            | "in"
+            | "local"
+            | "nil"
+            | "not"
+            | "or"
+            | "repeat"
+            | "return"
+            | "then"
+            | "true"
+            | "until"
+            | "while"
+            | "continue"
+            | "export"
+            | "type"
     )
 }
 

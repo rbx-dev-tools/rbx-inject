@@ -43,8 +43,8 @@ impl Config {
     /// make a working setup migrate before it can use a new binary. New projects
     /// should reach for TOML, which takes comments.
     pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
 
         let is_toml = path
             .extension()

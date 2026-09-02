@@ -183,7 +183,10 @@ fn sound_id_is_written_and_survives_a_round_trip() {
 #[test]
 fn module_source_creates_the_missing_module_script() {
     let mut dom = place();
-    let inputs = inputs().with_module_source("assets", "return { ui = { ShopIcon = \"rbxassetid://111\" } }");
+    let inputs = inputs().with_module_source(
+        "assets",
+        "return { ui = { ShopIcon = \"rbxassetid://111\" } }",
+    );
 
     let report = apply(
         &mut dom,
@@ -338,10 +341,9 @@ fn a_config_reports_the_inputs_it_needs() {
 
     // Literals need nothing at all, so a config of only literals must not
     // demand an asset map it never reads.
-    let literals = config(
-        r#"{"injections":[{"robloxPath":"a.b","keys":{"Volume":"$0.5","Name":"$$x"}}]}"#,
-    )
-    .needs();
+    let literals =
+        config(r#"{"injections":[{"robloxPath":"a.b","keys":{"Volume":"$0.5","Name":"$$x"}}]}"#)
+            .needs();
     assert!(!literals.asset_map);
     assert!(literals.modules.is_empty());
 }
@@ -416,7 +418,11 @@ fn a_missing_asset_key_warns_and_names_the_key() {
     );
 
     assert!(!report.changed());
-    assert!(report.warnings[0].contains("ui.Typo"), "{:?}", report.warnings);
+    assert!(
+        report.warnings[0].contains("ui.Typo"),
+        "{:?}",
+        report.warnings
+    );
 }
 
 // ─── Keys ────────────────────────────────────────────────────
@@ -466,7 +472,10 @@ fn a_rewritten_module_is_still_valid_luau() {
     // bare `end =` or an unquoted key with a space, this fails.
     let out = source(&dom, "ReplicatedStorage.GameConfig");
     let reparsed = rbx_inject::luau::apply_keys(&out, &[]).expect("output should be valid Luau");
-    assert!(reparsed.contains(r#"["has space"] = "spaced""#), "{reparsed}");
+    assert!(
+        reparsed.contains(r#"["has space"] = "spaced""#),
+        "{reparsed}"
+    );
     assert!(reparsed.contains(r#"["end"] = "keyword""#), "{reparsed}");
     assert!(reparsed.contains(r#"[4] = "four""#), "{reparsed}");
 }
@@ -491,14 +500,16 @@ fn keys_on_a_non_module_warn_rather_than_corrupt() {
     let mut dom = place();
     let report = apply(
         &mut dom,
-        &config(
-            r#"{"injections":[{"robloxPath":"StarterGui.Icon","keys":{"a":"$1"}}]}"#,
-        ),
+        &config(r#"{"injections":[{"robloxPath":"StarterGui.Icon","keys":{"a":"$1"}}]}"#),
         &inputs(),
     );
 
     assert!(!report.changed());
-    assert!(report.warnings[0].contains("ModuleScript"), "{:?}", report.warnings);
+    assert!(
+        report.warnings[0].contains("ModuleScript"),
+        "{:?}",
+        report.warnings
+    );
 }
 
 /// Properties run before keys for every rule, so a module whose whole Source is

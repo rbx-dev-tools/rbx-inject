@@ -11,8 +11,8 @@ pub mod dom;
 pub mod inputs;
 pub mod luau;
 
-use crate::inputs::Inputs;
 use crate::config::Config;
+use crate::inputs::Inputs;
 use crate::luau::KeyValue;
 use rbx_dom_weak::types::Variant;
 use rbx_dom_weak::{ustr, WeakDom};
@@ -228,9 +228,7 @@ fn apply_keys(
         Err(e) => {
             // The edits were already reported as changes; take them back, since
             // nothing was written.
-            report
-                .changes
-                .truncate(report.changes.len() - edits.len());
+            report.changes.truncate(report.changes.len() - edits.len());
             report.warn(format!("{path}: {e:#}"));
         }
     }

@@ -1,5 +1,8 @@
 # rbx-inject
 
+[![CI](https://github.com/rbx-dev-tools/rbx-inject/actions/workflows/ci.yml/badge.svg)](https://github.com/rbx-dev-tools/rbx-inject/actions/workflows/ci.yml)
+[![License: MPL 2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](./LICENSE)
+
 Write asset ids and config values into a Roblox place file, just before you
 upload it.
 
@@ -11,6 +14,29 @@ rbx-inject apply --place build/game.rbxl \
 
 No network, no credentials, no Roblox API. It reads a `.rbxl`, changes it, and
 writes it back. Uploading is somebody else's job.
+
+## Install
+
+With [Rokit](https://github.com/rojo-rbx/rokit), in your project's
+`rokit.toml`:
+
+```toml
+[tools]
+rbx-inject = "rbx-dev-tools/rbx-inject@0.1.0"
+```
+
+then `rokit install`. Or take a binary from the
+[releases page](https://github.com/rbx-dev-tools/rbx-inject/releases), which
+ships one zip per platform with a `SHA256SUMS` beside them, or build from
+source:
+
+```sh
+cargo install --git https://github.com/rbx-dev-tools/rbx-inject
+```
+
+> The published Linux binary is compiled against the release runner's glibc and
+> will not start on an older distribution. There is no musl build yet, for the
+> reason given in `.github/workflows/release.yml`; build from source there.
 
 ## Where this sits
 
@@ -287,4 +313,10 @@ cargo test
 ```
 
 The Luau runtime is vendored, so a C++ toolchain is needed to build it and
-nothing is needed to run it.
+nothing is needed to run it. That is also why CI builds on both Linux and
+Windows: nothing here is platform-specific Rust, but the C++ compiler
+underneath is, and that is where a build breaks.
+
+## License
+
+[MPL-2.0](./LICENSE).

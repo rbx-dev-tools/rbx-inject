@@ -108,8 +108,7 @@ fn main() -> Result<()> {
 
 fn read_place(path: &Path) -> Result<rbx_dom_weak::WeakDom> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    rbx_binary::from_reader(bytes.as_slice())
-        .with_context(|| format!("parsing {}", path.display()))
+    rbx_binary::from_reader(bytes.as_slice()).with_context(|| format!("parsing {}", path.display()))
 }
 
 fn run_check(args: Check) -> Result<()> {
@@ -194,9 +193,7 @@ fn require_inputs(config: &Config, inputs: &Inputs) -> Result<()> {
     let needs = config.needs();
 
     if needs.asset_map && !inputs.has_map() {
-        bail!(
-            "this config looks keys up in the asset map; pass --assets <asphalt's Assets.luau>"
-        );
+        bail!("this config looks keys up in the asset map; pass --assets <asphalt's Assets.luau>");
     }
 
     for name in &needs.modules {
@@ -285,8 +282,7 @@ fn write_place(dom: &rbx_dom_weak::WeakDom, output: &Path) -> Result<()> {
     // the only copy of a build that took a while to make.
     let temp = output.with_extension("rbxl.tmp");
     std::fs::write(&temp, &bytes).with_context(|| format!("writing {}", temp.display()))?;
-    std::fs::rename(&temp, output)
-        .with_context(|| format!("replacing {}", output.display()))?;
+    std::fs::rename(&temp, output).with_context(|| format!("replacing {}", output.display()))?;
 
     Ok(())
 }
@@ -303,8 +299,7 @@ fn run_migrate(args: Migrate) -> Result<()> {
         bail!("{} already exists", output.display());
     }
 
-    std::fs::write(&output, &toml)
-        .with_context(|| format!("writing {}", output.display()))?;
+    std::fs::write(&output, &toml).with_context(|| format!("writing {}", output.display()))?;
 
     println!(
         "Wrote {} ({} rule(s)). The original is untouched.",
