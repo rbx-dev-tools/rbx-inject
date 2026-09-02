@@ -4,33 +4,83 @@ Write asset ids and config values into a Roblox place file, just before you
 upload it.
 
 ```sh
-rbx-inject apply \
-  --place build/game.rbxl \
-  --config injections.toml \
-  --assets output/Assets.luau
+rbx-inject apply --place build/game.rbxl \
+                 --config injections.toml \
+                 --assets output/Assets.luau
 ```
 
 No network, no credentials, no Roblox API. It reads a `.rbxl`, changes it, and
 writes it back. Uploading is somebody else's job.
 
-## Why it is its own binary
+## Where this sits
 
-Because it is the only tool in the chain that parses Roblox's binary format,
-and that format moves.
+Every tool in a Roblox pipeline owns one boundary. This one owns the binary
+format, and nothing else does.
 
-On 2026-06-30 Roblox started storing `Instance.Tags` in the SharedString index.
-Every parser older than that day began refusing any place saved since, with
-`Type mismatch: Property Actor.Tags should be SharedString, but it was Tags`.
-Fixing it meant bumping rbx-dom, which meant a release of every tool that had
-rbx-dom compiled into it.
+| tool | talks to | needs credentials |
+| --- | --- | --- |
+| **rbx-inject** | **the bytes of a `.rbxl`, on disk** | **no** |
+| [asphalt](https://github.com/jacktabscode/asphalt) | uploads images and audio, writes a Luau module of ids | yes |
+| [rbx-cli](https://github.com/rbx-forge/rbx-cli) | Open Cloud and the Roblox web API: metadata, shop, configs, place upload, live ops | yes |
+| [rbx-observe](https://github.com/rbx-forge/rbx-observe) | public Roblox pages, read-only, other people's games | no |
+| [rbx-switch](https://github.com/rbx-dev-tools/rbx-switch) | the Studio account store on this machine | no |
+| [Rojo](https://rojo.space) | a filesystem tree, building a place from source | no |
 
-So there is exactly one of those. A deployment CLI that only talks to Open
-Cloud does not need to carry that risk, and this binary is small enough to
-re-release the same afternoon.
+The split is not tidiness. rbx-inject is the only one of them that parses
+Roblox's binary format, and that format moves: on 2026-06-30 Roblox started
+storing `Instance.Tags` in the SharedString index, and every parser older than
+that day began refusing any place saved since, with
 
-Embedding Luau (`mlua`, vendored) rather than shelling out to Lune is the same
-decision: shelling out would put a second Roblox-format parser in the pipeline,
-on a release cadence nobody here controls.
+```
+Type mismatch: Property Actor.Tags should be SharedString, but it was Tags
+```
+
+Fixing that means bumping rbx-dom, which means releasing every tool with rbx-dom
+compiled into it. So there is exactly one of those. A deployment CLI that only
+speaks Open Cloud should not carry that risk, and this binary is small enough to
+re-release the same afternoon. It is the same reason `rbx switch` left rbx-cli
+to become `rbx-switch`.
+
+Embedding Luau (`mlua`, vendored) rather than shelling out to Lune follows from
+it: shelling out would put a *second* Roblox-format parser in the pipeline, on a
+release cadence nobody here controls, and that second parser is exactly what
+broke.
+
+### Which tool do I want
+
+| I want to | use |
+| --- | --- |
+| upload an image or a sound and get its id | `asphalt sync` |
+| put that id onto an instance in my place | **`rbx-inject apply`** |
+| create passes, badges, products and get their ids | `rbx shop sync` |
+| set the game's name, description, icon, thumbnails, devices | `rbx meta sync` |
+| upload the finished place | `rbx place upload` |
+| see what a competitor sells and for how much | `rbx-observe storefront` |
+| switch which Studio account the next command uses | `rbx-switch` |
+| read code out of a place file, or build a place from source | Rojo |
+
+`rbxsync`, `rbxplace` and `rbxapikey` were the ancestors of `rbx shop`,
+`rbx place` and `rbx apikey`. If a project still calls them directly, that is a
+migration waiting, not a fourth tool.
+
+### In a pipeline
+
+```just
+deploy env:
+    asphalt sync
+    rbx shop sync --env {{env}} --apply
+    rbx-inject apply --place build/game.rbxl \
+                     --config injections.toml \
+                     --assets output/Assets.luau \
+                     --ids-module src/shared/GameIds.luau \
+                     --strict
+    rbx place upload --env {{env}} --file build/game.rbxl
+    rbx meta sync --env {{env}}
+```
+
+`--strict` matters there. Without it a rule that resolves to nothing is a
+warning and the deploy carries on, which ships a game with an empty
+`AnimationId`. With it, the deploy stops.
 
 ## What it does
 
@@ -42,7 +92,7 @@ DataModel.
 ```toml
 [[injections]]
 roblox_path = "StarterGui.Shop.Icon"
-properties.Image = "ui.ShopIcon"          # looked up in the asset map
+properties.Image = "ui.ShopIcon"
 ```
 
 | value | meaning |
@@ -52,18 +102,18 @@ properties.Image = "ui.ShopIcon"          # looked up in the asset map
 | `$rbxsync_module` | the whole generated ids module (needs `--ids-module`) |
 | `$require:models.main` | `return require(<id>)`, for a stub pointing at an uploaded model |
 
-The type comes from the rbx-dom reflection database, not from the property
-name. That matters more than it sounds: Roblox has two content types, the
-modern `Content` and the legacy string-shaped `ContentId`, and no naming rule
-separates them. `ImageLabel.Image` is a `ContentId`, `ImageLabel.ImageContent`
-is a `Content`. Writing the wrong one makes the *serializer* fail, far from the
-line that chose it.
+The type comes from the rbx-dom reflection database, not from the property name.
+That matters more than it sounds: Roblox has two content types, the modern
+`Content` and the legacy string-shaped `ContentId`, and no naming rule separates
+them. `ImageLabel.Image` is a `ContentId`, `ImageLabel.ImageContent` is a
+`Content`. Writing the wrong one makes the *serializer* fail, far from the line
+that chose it.
 
 A rule that writes a module source may create what it targets, intermediate
 `Folder`s included: the file is generated, so requiring it to already exist in
 the place would mean checking a generated stub into the `.rbxl`. The first
 segment is never created, because `ReplicatedStorge` should be an error rather
-than a new Folder next to the real service.
+than a new Folder sitting beside the real service.
 
 ### `keys` - set a value inside a ModuleScript's table
 
@@ -99,6 +149,31 @@ escape hatch for a literal that happens to look like a key.
 Keys are printed sorted, so re-running with unchanged inputs produces a
 byte-identical file and the place diff stays readable.
 
+## `check`
+
+```sh
+rbx-inject check --place build/game.rbxl --config injections.toml
+```
+
+Injection targets instances by path, and a path is a string nobody in Studio
+knows they are breaking. Rename `ReplicatedStorage.Assets.Characters.Player` and
+every rule underneath it quietly resolves to nothing.
+
+`check` is that failure moved earlier. It needs no asset map and no credentials,
+so it runs in a pre-commit hook or in CI, the day the rename happens rather than
+at the next deploy. It reports:
+
+- **error** - the rule cannot apply: no such instance, a `keys` target that is
+  not a ModuleScript, a module whose source does not evaluate to a table, a
+  first segment that is not a service.
+- **warning** - the rule will apply but probably not as intended: a property
+  name the reflection database does not know for that class. Roblox writes it,
+  then drops it on load, and nothing anywhere says so. A warning rather than an
+  error because the database lags each Roblox release by a few weeks.
+
+Pass `--assets` to also check that every lookup resolves. Exit is non-zero on
+any error, or on any warning with `--strict`.
+
 ## Config format
 
 TOML or JSON, picked by extension. JSON is supported because that is what
@@ -122,12 +197,13 @@ result depend on the order rules happen to appear in the file.
 
 ## Unresolved rules
 
-A rule that resolves to nothing is a warning, not an error: a place file often
-lags the config while a feature is being built, and failing the deploy for it
-would be wrong. Pass `--strict` to turn warnings into a non-zero exit, which is
-what you want in CI.
+In `apply`, a rule that resolves to nothing is a warning, not an error: a place
+often lags the config while a feature is being built, and failing every deploy
+for it would be wrong. `--strict` turns warnings into a non-zero exit, which is
+what a pipeline wants. `--dry-run` reports what would change and writes nothing.
 
-`--dry-run` reports what would change and writes nothing.
+The place is written to a temporary file and renamed, so an interrupted run
+cannot leave a truncated `.rbxl` where a working one used to be.
 
 ## A note on property migrations
 
@@ -135,8 +211,26 @@ Roblox is migrating legacy properties to the `Content` type, and rbx-dom applies
 those migrations *on read*. A place written with `Image` comes back with
 `ImageContent`; one written with `SoundId` comes back with `AudioContent`, not
 the `SoundContent` the pattern would suggest. Write the property your Studio
-build uses and let the migration happen; there is no list of names worth
-hardcoding.
+build uses and let the migration happen. There is no list of names worth
+hardcoding, which is the whole reason the reflection database decides.
+
+## Do I still need this?
+
+Less than you might, and the reason is not Rojo.
+
+Injection exists because asset ids are *baked into instance properties* rather
+than *read from a module by code*. `anim.AnimationId = Assets.animations.Eating`
+needs no rule at all. That is a code-architecture choice, and it is available
+without moving anything into a filesystem tree.
+
+Going fully Rojo-managed does remove the need, because generated modules become
+source files the build includes. But it also means GUIs, terrain and world
+building leave Studio, which is a real cost that a hybrid setup does not pay and
+does not avoid either: instances that stay authored in Studio still have
+properties to fill.
+
+So: convert ids from baked properties to a module read whenever you touch a
+system anyway, and keep this for the rest. It is a small binary with tests.
 
 ## Building
 
@@ -145,5 +239,5 @@ cargo build --release
 cargo test
 ```
 
-The Luau runtime is vendored, so a C++ toolchain is needed to build, and nothing
-is needed to run.
+The Luau runtime is vendored, so a C++ toolchain is needed to build it and
+nothing is needed to run it.

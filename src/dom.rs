@@ -97,8 +97,8 @@ pub fn variant_for(inst: &Instance, prop_name: &str, value: &str) -> Variant {
 }
 
 /// The type the reflection database declares for `class.prop`, walking up the
-/// superclass chain.
-fn declared_type(class_name: &str, prop_name: &str) -> Option<VariantType> {
+/// superclass chain. `None` when either is unknown to the database.
+pub fn declared_type(class_name: &str, prop_name: &str) -> Option<VariantType> {
     let db = rbx_reflection_database::get().ok()?;
     let mut class = db.classes.get(class_name)?;
 

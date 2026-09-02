@@ -6,6 +6,7 @@
 //! is a separate binary from the tools that do talk to Roblox.
 
 pub mod assets;
+pub mod check;
 pub mod config;
 pub mod dom;
 pub mod luau;
